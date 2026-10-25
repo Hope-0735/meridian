@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { DEFAULT_ALLOWED_ORIGIN } from "@meridian/shared";
+import { APP_NETWORK, DEFAULT_ALLOWED_ORIGIN } from "@meridian/shared";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 
@@ -75,30 +76,72 @@ export function applyCors(req: VercelRequest, res: VercelResponse): boolean {
   return false;
 }
 
-function clientIp(req: VercelRequest): string {
-  const vercelIp = req.headers["x-vercel-forwarded-for"];
-  if (typeof vercelIp === "string" && vercelIp)
-    return vercelIp.split(",")[0]?.trim() ?? vercelIp;
+/**
+ * Reject any method other than GET on a read-only route. Returns true when a
+ * 405 has already been sent, so callers use `if (requireGetMethod(req, res))
+ * return;`.
+ */
+export function requireGetMethod(
+  req: VercelRequest,
+  res: VercelResponse
+): boolean {
+  if (req.method === "GET") return false;
+  res.setHeader("Allow", "GET");
+  res.status(405).json({ error: "Method not allowed" });
+  return true;
+}
 
-  const fwd = req.headers["x-forwarded-for"];
-  return (
-    (typeof fwd === "string" ? (fwd.split(",")[0]?.trim() ?? fwd) : null) ??
-    req.socket?.remoteAddress ??
-    "unknown"
-  );
+// Cache policy shared by both vault-read endpoints: the list in
+// v1/vaults/index.ts and the single-vault read in v1/vaults/[vaultId].ts.
+// Both must use the same policy — #1051 happened because the detail endpoint
+// cached unconditionally while the list did not, so on testnet the detail
+// panel served pre-deposit balances and APY for up to a minute while the list
+// beside it was already current. Mainnet APY/TVL move slowly, so a short
+// fresh window keeps DeFiLlama call volume low, and stale-while-revalidate
+// lets the edge keep serving the last good payload through a transient
+// DeFiLlama outage instead of failing the whole dashboard. Testnet reads hit
+// the chain on every call (fetchAllVaults bypasses its cache there) so
+// deposits/withdrawals show up immediately during testing; an HTTP cache
+// layered on top would defeat that, so testnet gets no-store.
+const MAINNET_VAULT_CACHE_CONTROL =
+  "public, s-maxage=60, stale-while-revalidate=300";
+const TESTNET_VAULT_CACHE_CONTROL = "no-store";
+
+/**
+ * Cache-Control for successful (200) vault-read responses: a short CDN cache
+ * on mainnet, nothing at all on testnet so post-deposit reads stay fresh.
+ */
+export function vaultReadCacheControl(): string {
+  return APP_NETWORK.network === "testnet"
+    ? TESTNET_VAULT_CACHE_CONTROL
+    : MAINNET_VAULT_CACHE_CONTROL;
+}
+
+function clientIp(req: VercelRequest): string {
+  const vercelHeader = req.headers["x-vercel-forwarded-for"];
+  const vercelValue = Array.isArray(vercelHeader)
+    ? vercelHeader[0]
+    : vercelHeader;
+  const vercelIp = vercelValue?.split(",")[0]?.trim();
+  if (vercelIp && isIP(vercelIp)) return vercelIp;
+
+  return req.socket?.remoteAddress ?? "unknown";
 }
 
 /**
  * Enforces strict distributed rate limiting for fund-moving or keeper endpoints.
- * Returns false and sends a 503 HTTP response if production Redis is missing.
+ * Returns false and sends a 503 HTTP response if Redis is missing on any
+ * deployment. Only true local dev (no VERCEL_ENV at all) may fall back to the
+ * in-memory limiter: preview deployments have their own public URL, so they
+ * serve real traffic to these routes just like production.
  */
 export function enforceStrictRateLimit(res: VercelResponse): boolean {
-  const isProduction = process.env.VERCEL_ENV === "production";
+  const isLocalDev = process.env.VERCEL_ENV === undefined;
 
-  if (isProduction && !isDistributedRateLimitingConfigured()) {
+  if (!isLocalDev && !isDistributedRateLimitingConfigured()) {
     res.status(503).json({
       error:
-        "Service Unavailable: Distributed rate limiting is required in production for this route.",
+        "Service Unavailable: Distributed rate limiting is required on deployed environments for this route.",
       code: "RATE_LIMIT_BACKEND_UNAVAILABLE",
     });
     return false;
@@ -113,7 +156,7 @@ export interface RateLimitOptions {
 
 /**
  * Check rate limit for the incoming request.
- * - If strict: true (fund-moving/keeper endpoints), returns 503 if Upstash is unconfigured in production.
+ * - If strict: true (fund-moving/keeper endpoints), returns 503 if Upstash is unconfigured on any deployment (only local dev without VERCEL_ENV falls back).
  * - For non-strict routes (read-only), falls back to the in-memory rate limiter.
  * Writes a 429 or 503 response and returns false when blocked.
  */

@@ -8,16 +8,19 @@ meridian/
 │   ├── _lib/
 │   │   └── middleware.ts         # CORS + rate-limit helpers shared by handlers
 │   └── v1/
-│       ├── vaults/               # GET /api/v1/vaults, GET /api/v1/vaults/:id
-│       │   ├── index.ts
-│       │   └── [vaultId].ts
-│       ├── tx/                   # POST /api/v1/tx/*
-│       │   ├── deposit.ts
-│       │   ├── withdraw.ts
-│       │   ├── add-trustline.ts
-│       │   └── submit.ts
-│       └── positions/
-│           └── [publicKey].ts    # GET /api/v1/positions/:publicKey
+│       ├── admin/                # GET /api/v1/admin/vault-state, GET /api/v1/admin/history
+│       │   └── [resource].ts
+│       ├── keepers/              # /api/v1/keepers/* (accrue, health, rebalance, alert)
+│       │   └── [action].ts
+│       ├── positions/            # GET /api/v1/positions/:publicKey, GET /api/v1/positions/:publicKey/history
+│       │   ├── [publicKey]/
+│       │   │   └── history.ts
+│       │   └── [publicKey].ts
+│       ├── tx/                   # POST /api/v1/tx/* (deposit, withdraw, add-trustline, submit)
+│       │   └── [action].ts
+│       └── vaults/               # GET /api/v1/vaults, GET /api/v1/vaults/:id
+│           ├── index.ts
+│           └── [vaultId].ts
 │
 ├── apps/
 │   ├── web/                      # Vite + React 19 dashboard
@@ -35,16 +38,22 @@ meridian/
 │   │       │   └── wallet.ts     # Wallet adapters (Freighter, LOBSTR, xBull) + picker
 │   │       └── store/wallet.ts   # Zustand wallet state
 │   │
-│   └── api-local/                # Fastify server (local development only)
-│       └── src/
-│           ├── index.ts
-│           ├── routes/
-│           │   ├── vaults.ts
-│           │   ├── positions.ts
-│           │   └── tx.ts
-│           └── services/vaults.ts
+│   ├── api-local/                # Fastify server (local development only)
+│   │   └── src/
+│   │       ├── index.ts
+│   │       ├── routes/
+│   │       │   ├── vaults.ts
+│   │       │   ├── positions.ts
+│   │       │   └── tx.ts
+│   │       └── services/vaults.ts
+│   │
+│   ├── docs/                     # Documentation site (VitePress)
+│   ├── landing/                  # Static landing page
+│   └── strategies/               # Strategies simulation and visualization dashboard
 │
 ├── packages/
+│   ├── api-core/                 # Framework-agnostic route handlers shared by both servers
+│   ├── sdk/                      # Public TypeScript SDK (@meridian/sdk)
 │   ├── stellar-sdk-helpers/      # Stellar/Soroban client wrappers
 │   │   └── src/
 │   │       ├── tx.ts             # XDR builders (deposit, withdraw, submit)
@@ -66,13 +75,21 @@ meridian/
 │   │       ├── schemas.ts        # Zod request schemas
 │   │       └── utils.ts          # Pure utility functions
 │   │
+│   ├── strategies/               # Strategy simulation engine (@meridian/strategies)
+│   │   └── src/
+│   │       ├── decimal.ts        # Fixed-point Decimal math
+│   │       ├── guard.ts          # Simulation boundary guard
+│   │       ├── portfolio.ts      # Multi-asset portfolio tracking
+│   │       ├── strategy.ts       # Strategy lifecycle and execution
+│   │       └── types.ts          # Strategy parameters and metrics
+│   │
 │   └── contracts/                # Rust/Soroban smart contracts
 │       ├── vault/src/lib.rs           # MeridianVault: protocol-agnostic coordinator
 │       ├── blend-adapter/src/lib.rs   # Supplies USDC into a Blend lending pool
-│       └── defindex-adapter/src/lib.rs # Deposits USDC into a DeFindex vault
-│
-├── apps/landing/                 # Static landing page
-├── scripts/                      # deploy-testnet.sh (fresh stack), redeploy-blend-adapter.sh (swap adapter on a live vault)
+│       ├── defindex-adapter/src/lib.rs # Deposits USDC into a DeFindex vault
+│       ├── adapter-common/src/lib.rs  # Common traits and types for adapters
+│       └── musdc-token/src/lib.rs     # mUSDC yield-bearing share token
+├── scripts/                      # Deployment (testnet/mainnet, external pinger), adapter redeploy, verifier, build, and load tests
 ├── vercel.json                   # Vercel routing config
 └── turbo.json                    # Turborepo task graph
 ```
