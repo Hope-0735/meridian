@@ -41,11 +41,6 @@ describe("useWalletStore", () => {
     });
   });
 
-  it("setNetwork updates the active network", () => {
-    useWalletStore.getState().setNetwork("mainnet");
-    expect(useWalletStore.getState().network).toBe("mainnet");
-  });
-
   it("revalidate does nothing when no publicKey is set", async () => {
     await useWalletStore.getState().revalidate();
     expect(wallet.isAuthorized).not.toHaveBeenCalled();
@@ -68,6 +63,29 @@ describe("useWalletStore", () => {
     expect(useWalletStore.getState()).toMatchObject({
       publicKey: null,
       connected: false,
+    });
+  });
+
+  it("revalidate keeps a wallet connected while a stale check was in flight", async () => {
+    const OTHER_KEY =
+      "GCKFBEIYV2U22IO2BJ4KVJOIP7XPWQGQFKKWXR6DOSJBV7STMAQSMTGG";
+    let resolveCheck: (authorized: boolean) => void = () => {};
+    vi.mocked(wallet.isAuthorized).mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveCheck = resolve;
+      })
+    );
+
+    useWalletStore.setState({ publicKey: KEY, connected: true });
+    const pending = useWalletStore.getState().revalidate();
+
+    useWalletStore.getState().connect(OTHER_KEY);
+    resolveCheck(false);
+    await pending;
+
+    expect(useWalletStore.getState()).toMatchObject({
+      publicKey: OTHER_KEY,
+      connected: true,
     });
   });
 });

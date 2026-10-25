@@ -6,13 +6,13 @@ import {
   Asset,
   Contract,
   Operation,
+  SorobanDataBuilder,
   TransactionBuilder,
   nativeToScVal,
   xdr,
 } from "@stellar/stellar-sdk";
 import {
   toStroops,
-  resolveProtocol,
   waitForTransaction,
   simErrorMessage,
   prepareSorobanTx,
@@ -246,6 +246,27 @@ describe("simErrorMessage snapshots", () => {
 describe("prepareSorobanTx contract errors", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("returns the assembled transaction fee, including its inclusion fee", async () => {
+    const caller = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    const op = new Contract(CONTRACT_ADDRESSES.testnet.vault).call("deposit");
+    const account = new Account(caller, "0");
+
+    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(account);
+    vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
+      id: "1",
+      latestLedger: 1,
+      minResourceFee: "500",
+      events: [],
+      transactionData: new SorobanDataBuilder().setResourceFee("500"),
+      result: { auth: [], retval: xdr.ScVal.scvVoid() },
+      _parsed: true,
+    });
+
+    await expect(prepareSorobanTx(TESTNET, caller, op)).resolves.toMatchObject({
+      fee: "600",
+    });
+  });
+
   it.each([
     ["HostError: Error(Contract, #18)", true],
     ["HostError: Error(Contract, #15)", true],
@@ -265,7 +286,10 @@ describe("prepareSorobanTx contract errors", () => {
         latestLedger: 1,
         error: raw,
         events: [],
-      });
+        _parsed: true,
+      } as unknown as Awaited<
+        ReturnType<typeof rpc.Server.prototype.simulateTransaction>
+      >);
       const network: StellarNetwork = {
         network: "testnet",
         rpcUrl: "https://soroban-testnet.stellar.org",
@@ -367,7 +391,10 @@ describe("simulateView", () => {
       .invokeHostFunctionOp()
       .hostFunction()
       .invokeContract();
-    expect(invocation.contractAddress().contractId().toString("hex")).toBe(
+    const contractIdBytes = invocation
+      .contractAddress()
+      .contractId() as unknown as Uint8Array;
+    expect(Buffer.from(contractIdBytes).toString("hex")).toBe(
       new Contract(CONTRACT_ID).address().toBuffer().toString("hex")
     );
     expect(invocation.functionName().toString()).toBe("get_total_assets");
@@ -430,22 +457,6 @@ describe("toStroops", () => {
   });
 });
 
-describe("resolveProtocol", () => {
-  it("maps blend vault ids to Blend", () => {
-    expect(resolveProtocol("blend-usdc-fixed")).toBe("Blend");
-    expect(resolveProtocol("blend-eurc-variable")).toBe("Blend");
-  });
-
-  it("maps defindex vault ids to DeFindex", () => {
-    expect(resolveProtocol("defindex-usdc")).toBe("DeFindex");
-  });
-
-  it("throws for vault ids with no protocol mapping", () => {
-    expect(() => resolveProtocol("ondo-usdy")).toThrow(/No protocol mapping/);
-    expect(() => resolveProtocol("")).toThrow(/No protocol mapping/);
-  });
-});
-
 const TESTNET: StellarNetwork = {
   network: "testnet",
   rpcUrl: "https://soroban-testnet.stellar.org",
@@ -481,7 +492,7 @@ describe("assertRequiredTrustlines", () => {
 
   it("resolves when the USDC trustline is present", async () => {
     vi.spyOn(Horizon.Server.prototype, "loadAccount").mockResolvedValue({
-      balances: [makeBalance("USDC", USDC_ISSUER_TESTNET)],
+      balances: [makeBalance("USDC", USDC_ISSUER_TESTNET!)],
     } as unknown as Awaited<ReturnType<Horizon.Server["loadAccount"]>>);
 
     await expect(
@@ -527,7 +538,7 @@ describe("buildAddTrustlineTx", () => {
     // mUSDC is a SEP-41 contract token post-#578 (MUSDC_ISSUER.testnet is
     // ""), so it has no classic trustline to check — only USDC is required.
     vi.spyOn(Horizon.Server.prototype, "loadAccount").mockResolvedValue({
-      balances: [makeBalance("USDC", USDC_ISSUER_TESTNET)],
+      balances: [makeBalance("USDC", USDC_ISSUER_TESTNET!)],
     } as unknown as Awaited<ReturnType<Horizon.Server["loadAccount"]>>);
 
     await expect(

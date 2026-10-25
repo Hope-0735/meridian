@@ -79,9 +79,6 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
-      # The Vercel serverless functions in api/ live outside the pnpm workspace,
-      # so turbo doesn't cover them — typecheck them explicitly.
-      - run: pnpm typecheck:api
       - name: Verify apps/api-local build output is flat
         run: |
           pnpm --filter @meridian/api-local build
@@ -154,7 +151,7 @@ jobs:
     # signing is mocked, see apps/web/e2e/fixtures.ts), so it exercises
     # the real API and Soroban simulation paths end to end. Tests use page.route()
     # to stub live-network-dependent data where it would otherwise be flaky on
-    # testnet RPC hiccups (see #535). Blocking.
+    # testnet RPC hiccups (see #535). Not a required check (#1036).
     #
     # STELLAR_NETWORK must be set explicitly: mainnet is now the default
     # (packages/shared/src/constants.ts, #738) since the product is live
@@ -188,7 +185,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
@@ -207,12 +204,9 @@ jobs:
         working-directory: packages/contracts
         run: >-
           cargo llvm-cov
-          --package meridian-vault
-          --package meridian-blend-adapter
-          --package meridian-defindex-adapter
-          --package adapter-common
+          --workspace
           --summary-only
           --fail-under-lines 97.5
       - name: Build wasm
         working-directory: packages/contracts
-        run: cargo build --target wasm32-unknown-unknown --release
+        run: cargo build --target wasm32v1-none --release

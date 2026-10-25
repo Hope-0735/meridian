@@ -20,6 +20,7 @@ export function WalletConnect() {
     cancelRiskDisclosure,
   } = useWalletConnect();
   const [copied, setCopied] = useState(false);
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [installedById, setInstalledById] = useState<
     Partial<Record<WalletId, boolean>>
@@ -30,6 +31,13 @@ export function WalletConnect() {
   // Which option receives focus when the menu opens: the first for a click or
   // ArrowDown, the last for ArrowUp (WAI-ARIA menu button pattern).
   const openFocusRef = useRef<"first" | "last">("first");
+
+  useEffect(
+    () => () => {
+      if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
+    },
+    []
+  );
 
   // Refreshed on every open rather than once on mount: extension install
   // state can change between opens without a page reload.
@@ -71,7 +79,8 @@ export function WalletConnect() {
     try {
       await navigator.clipboard.writeText(publicKey);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       push("error", t("walletConnect.copyFailed"));
     }
@@ -171,7 +180,7 @@ export function WalletConnect() {
 
   if (connected && publicKey) {
     return (
-      <div className="flex items-center gap-2 text-sm border border-gray-700 rounded-lg px-3 py-2 text-gray-300 hover:border-gray-600 hover:text-white transition-colors duration-150">
+      <div className="flex items-center gap-2 text-sm border border-gray-700 rounded-lg px-3 py-2 text-gray-300 hover:border-gray-600 hover:text-paper transition-colors duration-150">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
         <span>{shortenAddress(publicKey)}</span>
         <button
@@ -182,7 +191,7 @@ export function WalletConnect() {
           aria-label={
             copied ? t("walletConnect.copied") : t("walletConnect.copyAddress")
           }
-          className="text-gray-400 hover:text-white transition-colors duration-150"
+          className="text-gray-400 hover:text-paper transition-colors duration-150"
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
@@ -190,7 +199,7 @@ export function WalletConnect() {
         <span className="text-gray-600">·</span>
         <button
           onClick={handleDisconnect}
-          className="text-gray-400 hover:text-white transition-colors duration-150"
+          className="text-gray-400 hover:text-paper transition-colors duration-150"
         >
           {t("walletConnect.disconnect")}
         </button>
@@ -218,7 +227,7 @@ export function WalletConnect() {
         disabled={status === "connecting"}
         aria-haspopup="menu"
         aria-expanded={pickerOpen}
-        className="text-sm border border-gray-700 rounded-lg pl-4 pr-3 py-2 font-medium text-gray-300 hover:border-gray-600 hover:text-white transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+        className="text-sm border border-gray-700 rounded-lg pl-4 pr-3 py-2 font-medium text-gray-300 hover:border-gray-600 hover:text-paper transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
       >
         {status === "connecting"
           ? t("common.connecting")
@@ -230,7 +239,7 @@ export function WalletConnect() {
         <div
           ref={menuRef}
           role="menu"
-          aria-label={t("common.connectWallet")}
+          aria-label={t("walletConnect.chooseWallet")}
           onKeyDown={handleMenuKeyDown}
           data-testid="wallet-picker-menu"
           className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-gray-800 bg-deep shadow-xl shadow-black/40 overflow-hidden z-10"
@@ -245,7 +254,7 @@ export function WalletConnect() {
                 tabIndex={-1}
                 data-testid={`wallet-picker-option-${w.id}`}
                 onClick={() => handlePick(w)}
-                className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800/60 hover:text-white transition-colors duration-150"
+                className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800/60 hover:text-paper transition-colors duration-150"
               >
                 <span>{w.name}</span>
                 {installed === true && (

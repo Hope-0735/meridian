@@ -5,7 +5,7 @@ import type { TFunction } from "i18next";
 const ACTION_BADGE: Record<string, { labelKey: string; className: string }> = {
   set_admin: {
     labelKey: "adminHistory.actions.setAdmin",
-    className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+    className: "bg-entry/15 text-blue-400 border-entry/30",
   },
   set_paused: {
     labelKey: "adminHistory.actions.paused",
@@ -21,11 +21,11 @@ const ACTION_BADGE: Record<string, { labelKey: string; className: string }> = {
   },
   transfer_admin: {
     labelKey: "adminHistory.actions.transferAdmin",
-    className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+    className: "bg-entry/15 text-blue-400 border-entry/30",
   },
   accept_admin: {
     labelKey: "adminHistory.actions.acceptAdmin",
-    className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+    className: "bg-entry/15 text-blue-400 border-entry/30",
   },
 };
 
@@ -53,22 +53,14 @@ function formatTimestamp(iso: string, t: TFunction, locale: string): string {
 interface AdminActionHistoryProps {
   vaultId: string;
   network: "testnet" | "mainnet";
-  isAdmin?: boolean;
 }
 
 export function AdminActionHistory({
   vaultId,
   network,
-  isAdmin,
 }: AdminActionHistoryProps) {
   const { t, i18n } = useTranslation();
-  const { data, isLoading, isError } = useAdminHistory(
-    isAdmin ? vaultId : null
-  );
-
-  if (!isAdmin) {
-    return null;
-  }
+  const { data, isLoading, isError } = useAdminHistory(vaultId);
 
   const actions = data?.actions ?? [];
 
