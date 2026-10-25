@@ -2,7 +2,8 @@
   "name": "@meridian/contracts",
   "version": "0.1.0",
   "scripts": {
-    "build": "stellar contract build",
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "build": "node init && stellar contract build",
     "deploy:testnet": "bash ../../scripts/deploy-testnet.sh"
   }
 }

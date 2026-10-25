@@ -687,24 +687,13 @@ impl MeridianVault {
     /// Entry time belongs to a depositor, not to the shares: it is recorded
     /// when an address first deposits, and now (#578) is also split
     /// pro-rata on a transfer by `on_transfer` — see that function's doc
-    /// comment for the split math. An address holding no mUSDC reports 0
-    /// even if it deposited earlier and later transferred everything away,
-    /// so a record left behind by a full transfer-out is never reported as
-    /// a live position.
+    /// Returns the ledger timestamp of the address's current deposit.
     ///
-    /// `on_transfer` clears a sender's record itself the moment a full
-    /// transfer-out reaches zero, so a leftover record found here should be
-    /// unreachable in the current system; this self-heal is kept as a
-    /// defensive fallback for any balance that reached zero another way
-    /// this contract doesn't yet account for (and for state left behind by
-    /// mUSDC's pre-#578 life as a plain Stellar Asset Contract with no
-    /// transfer hook at all, before a live-holder migration if one hasn't
-    /// run yet). Clearing it here means it can never resurface as a stale
-    /// basis/entry time if this address's balance later becomes nonzero
-    /// again through an unrelated deposit or transfer-in.
+    /// An address that holds no mUSDC returns `0` because it holds no position.
+    /// Cleared on full withdrawal and full transfer-out, and cleaned up on
+    /// subsequent deposit if leftover records exist.
     pub fn get_entry_time(env: Env, address: Address) -> u64 {
         if Self::get_position(env.clone(), address.clone()) == 0 {
-            clear_position_records(&env, &address);
             return 0;
         }
         let key = DataKey::Entry(address);
@@ -726,15 +715,8 @@ impl MeridianVault {
     /// here because it holds nothing, rather than a stale basis for shares
     /// it no longer has — `on_transfer` clears both records itself the
     /// moment a full transfer-out reaches zero.
-    ///
-    /// Like `get_entry_time`, the self-heal below (clearing a zero-position
-    /// holder's leftover record) should be unreachable in the current
-    /// system; it's kept as a defensive fallback, and as a bridge for
-    /// records left over from mUSDC's pre-#578 life as a plain SAC before a
-    /// live-holder migration, if one hasn't run yet.
     pub fn get_principal(env: Env, address: Address) -> i128 {
         if Self::get_position(env.clone(), address.clone()) == 0 {
-            clear_position_records(&env, &address);
             return 0;
         }
         let key = DataKey::Principal(address);
@@ -1042,6 +1024,9 @@ impl MeridianVault {
         // new-adapter leg.
         old_adapter.refresh();
         let value_before = old_adapter.total_assets();
+        if value_before <= 0 {
+            return Err(ContractError::MigrationBaselineInvalid);
+        }
 
         // Baseline the target adapter's balance before landing any funds on
         // it, so a pre-existing residue (e.g. left over from a prior
@@ -1610,6 +1595,10 @@ mod tests {
                 env.storage().instance().get(&MM_FIXED).unwrap_or(0)
             }
 
+            pub fn total_shares(env: Env) -> i128 {
+                env.storage().instance().get(&MM_SH).unwrap_or(0)
+            }
+
             pub fn refresh(env: Env) {
                 // total_assets is still manually set by the test (see
                 // set_total_assets above); this only extends TTL, matching
@@ -1805,6 +1794,139 @@ mod tests {
         StellarAssetClient::new(&env, &usdc_id).mint(&user, &10_000_000_000_i128);
 
         (env, admin, user, usdc_id, musdc_id, adapter_id, vault)
+    }
+
+    #[test]
+    fn deposit_rejects_missing_authorization() {
+        let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_deposit(&user, &100_0000000, &0),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        // A zero amount stops before the token's own authorization check. If
+        // the vault guard disappears, this returns ZeroAmount instead of Abort.
+        assert_eq!(
+            vault.try_deposit(&user, &0, &0),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_total_shares(), 0);
+        assert_eq!(vault.get_position(&user), 0);
+    }
+
+    #[test]
+    fn withdraw_rejects_missing_authorization() {
+        let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
+        let amount = 100_0000000;
+        vault.deposit(&user, &amount, &0);
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_withdraw(&user, &amount, &0),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        // Isolate the vault guard from the mUSDC burn's authorization check.
+        assert_eq!(
+            vault.try_withdraw(&user, &0, &0),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_total_shares(), amount);
+        assert_eq!(vault.get_position(&user), amount);
+    }
+
+    #[test]
+    fn set_paused_rejects_missing_authorization() {
+        let (env, _admin, _user, _usdc, _musdc, _adapter, vault) = setup();
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_set_paused(&true),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert!(!vault.is_paused());
+    }
+
+    #[test]
+    fn transfer_admin_rejects_missing_authorization() {
+        let (env, admin, user, _usdc, _musdc, _adapter, vault) = setup();
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_transfer_admin(&user),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_admin(), admin);
+        assert_eq!(vault.get_pending_admin(), None);
+    }
+
+    #[test]
+    fn accept_admin_rejects_missing_authorization() {
+        let (env, admin, user, _usdc, _musdc, _adapter, vault) = setup();
+        vault.transfer_admin(&user);
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_accept_admin(),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_admin(), admin);
+        assert_eq!(vault.get_pending_admin(), Some(user));
+    }
+
+    #[test]
+    fn set_adapter_rejects_missing_authorization() {
+        let (env, _admin, _user, usdc, _musdc, adapter, vault) = setup();
+        let new_adapter = env.register(MockAdapter, ());
+        MockAdapterClient::new(&env, &new_adapter).initialize(&usdc);
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_set_adapter(&new_adapter),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_adapter(), adapter);
+    }
+
+    #[test]
+    fn begin_migration_rejects_missing_authorization() {
+        let (env, _admin, _user, usdc, _musdc, adapter, vault) = setup();
+        let new_adapter = env.register(MockAdapter, ());
+        MockAdapterClient::new(&env, &new_adapter).initialize(&usdc);
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_begin_migration(&new_adapter),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_adapter(), adapter);
+        assert_eq!(
+            vault.try_get_migration_snapshot(),
+            Err(Ok(ContractError::MigrationNotInitialized))
+        );
+    }
+
+    #[test]
+    fn migrate_adapter_rejects_missing_authorization() {
+        let (env, _admin, user, usdc, _musdc, adapter, vault) = setup();
+        let amount = 100_0000000;
+        vault.deposit(&user, &amount, &0);
+        let new_adapter = env.register(MockAdapter, ());
+        MockAdapterClient::new(&env, &new_adapter).initialize(&usdc);
+        vault.begin_migration(&new_adapter);
+        let snapshot = vault.get_migration_snapshot();
+        env.ledger()
+            .with_mut(|li| li.sequence_number += MIN_LEDGER_GAP);
+        env.set_auths(&[]);
+
+        assert_eq!(
+            vault.try_migrate_adapter(&new_adapter, &0),
+            Err(Err(soroban_sdk::InvokeError::Abort))
+        );
+        assert_eq!(vault.get_adapter(), adapter);
+        assert_eq!(vault.get_migration_snapshot(), snapshot);
+        assert_eq!(vault.get_total_shares(), amount);
+        assert_eq!(vault.get_position(&user), amount);
     }
 
     #[test]
@@ -2243,6 +2365,41 @@ mod tests {
 
         assert_eq!(vault.get_entry_time(&user), 0);
         assert_eq!(vault.get_principal(&user), 0);
+    }
+
+    #[test]
+    fn get_entry_time_and_get_principal_are_pure_views_without_storage_writes() {
+        let (env, _admin, _user, _usdc, _musdc_id, _adapter, vault) = setup();
+        let stranger = Address::generate(&env);
+
+        // A stranger with zero balance
+        assert_eq!(vault.get_position(&stranger), 0);
+
+        // Manually place Entry and Principal keys (simulating legacy leftover state)
+        let entry_key = DataKey::Entry(stranger.clone());
+        let principal_key = DataKey::Principal(stranger.clone());
+        env.as_contract(&vault.address, || {
+            env.storage().persistent().set(&entry_key, &999_u64);
+            env.storage()
+                .persistent()
+                .set(&principal_key, &123_456_i128);
+        });
+
+        // Reading views returns 0 because position is 0
+        assert_eq!(vault.get_entry_time(&stranger), 0);
+        assert_eq!(vault.get_principal(&stranger), 0);
+
+        // Neither view call should clear/mutate storage: keys remain unchanged
+        env.as_contract(&vault.address, || {
+            assert_eq!(
+                env.storage().persistent().get::<_, u64>(&entry_key),
+                Some(999_u64)
+            );
+            assert_eq!(
+                env.storage().persistent().get::<_, i128>(&principal_key),
+                Some(123_456_i128)
+            );
+        });
     }
 
     #[test]
@@ -2843,6 +3000,50 @@ mod tests {
             snapshot_result,
             Err(Ok(ContractError::MigrationNotInitialized))
         );
+    }
+
+    #[test]
+    fn migrate_adapter_rejects_a_non_positive_old_adapter_baseline() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let usdc = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+
+        // The old adapter is the manipulable mock so its reported value can
+        // be driven to zero while the vault still holds adapter shares.
+        let old_id = env.register(ManipulableMockAdapter, ());
+        ManipulableMockAdapterClient::new(&env, &old_id).initialize(&usdc);
+
+        let vault_id = Address::generate(&env);
+        let musdc_id = env.register(MockMusdc, ());
+        MockMusdcClient::new(&env, &musdc_id).initialize(&vault_id);
+        env.register_at(
+            &vault_id,
+            MeridianVault,
+            (&admin, &usdc, &musdc_id, &old_id, &admin),
+        );
+        let vault = MeridianVaultClient::new(&env, &vault_id);
+        let amount = 100_0000000_i128;
+        StellarAssetClient::new(&env, &usdc).mint(&user, &amount);
+        vault.deposit(&user, &amount, &0);
+
+        let new_id = env.register(MockAdapter, ());
+        MockAdapterClient::new(&env, &new_id).initialize(&usdc);
+        vault.begin_migration(&new_id);
+        env.ledger()
+            .with_mut(|li| li.sequence_number += MIN_LEDGER_GAP);
+
+        for bad in [0_i128, -1] {
+            ManipulableMockAdapterClient::new(&env, &old_id).set_total_assets(&bad);
+            let result = vault.try_migrate_adapter(&new_id, &0);
+            assert_eq!(result, Err(Ok(ContractError::MigrationBaselineInvalid)));
+        }
+
+        // Nothing moved.
+        assert_eq!(vault.get_adapter(), old_id);
     }
 
     #[test]

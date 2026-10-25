@@ -3,6 +3,11 @@
     "title": "Meridian"
   },
 
+  "toasts": {
+    "notifications": "Notifications",
+    "dismiss": "Dismiss {{kind}} notification"
+  },
+
   "walletConnect": {
     "disconnect": "Disconnect",
     "copyAddress": "Copy Address",
@@ -86,8 +91,13 @@
 
   "admin": {
     "title": "Admin Dashboard",
+    "access": "Admin access",
     "connectPrompt": "Connect an authorized admin wallet to view the dashboard.",
     "notAuthorized": "This wallet is not authorized to view the admin dashboard.",
+    "switchWallet": "Switch Wallet",
+    "connected": "Connected",
+    "readError": "Failed to verify admin status.",
+    "loading": "Loading...",
     "keeperHealth": {
       "title": "Keeper Health",
       "accrual": "Accrual Keeper",
@@ -159,7 +169,7 @@
     "parameters": {
       "title": "Protocol Parameters",
       "migrationCooldown": "Migration Cooldown",
-      "migrationCooldownValue": "{{ledgers}} ledgers (~1 minute)",
+      "migrationCooldownValue": "{{ledgers}} ledgers (~1 day)",
       "note": "Fixed contract constants, not admin-configurable. Verify against the contract source directly rather than trusting this page alone."
     },
     "audit": {

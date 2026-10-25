@@ -97,6 +97,10 @@ vi.mock("@meridian/stellar-sdk-helpers", async (importOriginal) => {
       ],
       failures: [],
     })),
+    fetchVaultsWithCache: vi.fn(async () => ({
+      vaults: [{ id: "blend-usdc-fixed", protocol: "blend" }],
+      cached: false,
+    })),
     fetchAllVaults: vi.fn(async () => [
       { id: "blend-usdc-fixed", protocol: "blend" },
     ]),
@@ -193,6 +197,7 @@ vi.mock("@meridian/stellar-sdk-helpers", async (importOriginal) => {
 
 import txHandler from "../v1/tx/[action]";
 import vaultsHandler from "../v1/vaults/index";
+import vaultDetailHandler from "../v1/vaults/[vaultId]";
 import positionsHandler from "../v1/positions/[publicKey]";
 import keepersHandler from "../v1/keepers/[action]";
 import positionHistoryHandler from "../v1/positions/[publicKey]/history";
@@ -216,6 +221,8 @@ import {
   MissingTrustlineError,
   getPositionHistory,
   runPositionSnapshotKeeper,
+  fetchAllVaults,
+  fetchVaultsWithCache,
 } from "@meridian/stellar-sdk-helpers";
 
 // A 56-char Stellar public key shape (only the length is validated).
@@ -615,6 +622,50 @@ describe("POST /api/v1/tx/submit", () => {
   });
 });
 
+describe("POST /api/v1/tx/[action] action validation", () => {
+  it("rejects prototype property names like constructor with 404", async () => {
+    const res = makeRes();
+    await txHandler(
+      fakeReq({
+        query: { action: "constructor" },
+        method: "POST",
+        body: { status: 204, body: { anything: true } },
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: "Unknown action" });
+  });
+
+  it("rejects prototype property names like toString with 404", async () => {
+    const res = makeRes();
+    await txHandler(
+      fakeReq({
+        query: { action: "toString" },
+        method: "POST",
+        body: {},
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: "Unknown action" });
+  });
+
+  it("rejects unknown action names with 404", async () => {
+    const res = makeRes();
+    await txHandler(
+      fakeReq({
+        query: { action: "unknown" },
+        method: "POST",
+        body: {},
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: "Unknown action" });
+  });
+});
+
 describe("GET /api/v1/vaults", () => {
   it("returns the vault list with the mainnet cache header (APP_NETWORK default in tests)", async () => {
     const res = makeRes();
@@ -629,6 +680,93 @@ describe("GET /api/v1/vaults", () => {
       cached: false,
     });
   });
+
+  it("rejects non-GET methods with 405", async () => {
+    const res = makeRes();
+    await vaultsHandler(fakeReq({ method: "POST" }), res);
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["Allow"]).toBe("GET");
+    expect(fetchAllVaults).not.toHaveBeenCalled();
+  });
+
+  it("reports cached: true when served from cache", async () => {
+    vi.mocked(fetchVaultsWithCache).mockResolvedValueOnce({
+      vaults: [
+        {
+          id: "blend-usdc-fixed",
+          protocol: "blend",
+          asset: "USDC",
+          name: "Blend USDC",
+          label: "Blend",
+          apy: 5,
+          tvl: 1000,
+          userBalance: 0,
+          riskLevel: "safe",
+        },
+      ],
+      cached: true,
+    });
+    const res = makeRes();
+    await vaultsHandler(fakeReq({ method: "GET" }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      cached: true,
+    });
+  });
+});
+
+describe("GET /api/v1/vaults/:vaultId", () => {
+  it("returns a vault with the same cache header as the list endpoint", async () => {
+    vi.mocked(fetchAllVaults).mockResolvedValueOnce([
+      {
+        id: "meridian-usdc",
+        protocol: "meridian",
+        asset: "USDC",
+        name: "Meridian",
+        label: "USDC Vault",
+        apy: 5,
+        tvl: 1000,
+        userBalance: 0,
+        riskLevel: "safe",
+      },
+    ]);
+    const res = makeRes();
+    await vaultDetailHandler(
+      fakeReq({ method: "GET", query: { vaultId: "meridian-usdc" } }),
+      res
+    );
+    expect(res.statusCode).toBe(200);
+
+    // Both vault reads must share one per-network cache policy — a detail
+    // response cached while the list is fresh (or vice versa) is the #1051 bug.
+    const listRes = makeRes();
+    await vaultsHandler(fakeReq({ method: "GET" }), listRes);
+    expect(res.headers["Cache-Control"]).toBe(
+      "public, s-maxage=60, stale-while-revalidate=300"
+    );
+    expect(res.headers["Cache-Control"]).toBe(listRes.headers["Cache-Control"]);
+  });
+
+  it("leaves error responses uncached", async () => {
+    const res = makeRes();
+    await vaultDetailHandler(
+      fakeReq({ method: "GET", query: { vaultId: "unknown-vault" } }),
+      res
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.headers["Cache-Control"]).toBeUndefined();
+  });
+
+  it("rejects non-GET methods with 405", async () => {
+    const res = makeRes();
+    await vaultDetailHandler(
+      fakeReq({ method: "POST", query: { vaultId: "meridian-usdc" } }),
+      res
+    );
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["Allow"]).toBe("GET");
+    expect(fetchAllVaults).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/v1/positions/:publicKey", () => {
@@ -639,6 +777,17 @@ describe("GET /api/v1/positions/:publicKey", () => {
       res
     );
     expect(res.statusCode).toBe(400);
+    expect(resolvePositions).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-GET methods with 405", async () => {
+    const res = makeRes();
+    await positionsHandler(
+      fakeReq({ method: "POST", query: { publicKey: PUBKEY } }),
+      res
+    );
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["Allow"]).toBe("GET");
     expect(resolvePositions).not.toHaveBeenCalled();
   });
 
@@ -1273,6 +1422,27 @@ describe("GET /api/v1/keepers/health", () => {
       lastSuccessMs: null,
     });
   });
+
+  it("returns 503 when the upstream rate limiter fails", async () => {
+    vi.mocked(checkRateLimit).mockRejectedValueOnce(
+      new Error("Upstash timeout")
+    );
+
+    const res = makeRes();
+    await keepersHandler(
+      fakeReq({
+        query: { action: "health" },
+        method: "GET",
+        headers: {},
+      }),
+      res
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      error: "Rate limiter unavailable; refusing to run",
+    });
+  });
 });
 
 describe("GET /api/v1/admin/vault-state", () => {
@@ -1348,5 +1518,21 @@ describe("GET /api/v1/admin/vault-state", () => {
     );
 
     expect(res.statusCode).toBe(503);
+  });
+
+  it("rejects non-GET methods with 405", async () => {
+    const res = makeRes();
+    await adminHandler(
+      fakeReq({
+        query: { resource: "vault-state" },
+        method: "POST",
+        headers: {},
+      }),
+      res
+    );
+
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["Allow"]).toBe("GET");
+    expect(fetchCoordinatorState).not.toHaveBeenCalled();
   });
 });
